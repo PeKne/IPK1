@@ -1,4 +1,9 @@
-//TODO: hlavicka
+/**
+ * Author:    PETR KNETL
+ * Created:   1.03.2018
+ *
+ * Project: School project 1 to IPK class, basic client-server file transport protocol
+ **/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +16,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <time.h>
 
 //TODO : navratove hodnoty, zpravy
 
@@ -20,7 +26,7 @@ int main(int argc, char* argv[]){
   struct sockaddr_in serv_addr;
   struct hostent *server;
   char file_buffer[256];
-  char access_message[6];
+  char communication_buffer[256];
   int incomingBytes;
 
   if (argc != 7) {
@@ -28,8 +34,11 @@ int main(int argc, char* argv[]){
     return 4;
   }
  int par;
- int hflag, pflag, rflag, wflag = 0; // pomocne promenne pro getopt()
- char *hvalue, *pvalue, *rvalue, *wvalue = NULL; // pomocne promenne pro getopt()
+ int nread;
+ int hflag, pflag, rflag, wflag; // pomocne promenne pro getopt()
+ hflag = pflag = rflag = wflag = 0;
+ char *hvalue, *pvalue, *rvalue, *wvalue; // pomocne promenne pro getopt()
+ hvalue = pvalue = rvalue = wvalue = NULL;
 
  while ((par = getopt (argc, argv, "h:p:r:w:")) != -1) //zpracovani parametru
     switch (par)
@@ -81,6 +90,7 @@ int main(int argc, char* argv[]){
     return 2;
   }
 
+
   setsockopt(cli_socket, SOL_SOCKET, SO_REUSEADDR, (const void *)1, sizeof(int));
 
   server = gethostbyname(hvalue); //nacteni adresy hosta
@@ -99,54 +109,137 @@ int main(int argc, char* argv[]){
     return 4;
   }
 
-  FILE *client_file;
+
 
   /* CTENI ZE SERVERU*/
   if(rflag == 1){
 
-    bzero(access_message, 6);
-    strcpy(access_message,"read");
-    printf("reading...\n");
+    const char delim = '/';
+    char path[256];
+    char* filename;
 
-    int r = write(cli_socket, access_message, strlen(access_message));
+    bzero(path, 256);
+    strcpy(path, rvalue);
+
+    filename =strrchr(path, delim);
+
+    bzero(communication_buffer, 256);
+    char message[256];
+    strcpy(message, "r");
+    if (filename != NULL){
+      strcat(message, filename + 1);
+    }
+    else{
+      strcat(message, rvalue);
+    }
+
+    strcpy(communication_buffer, message);
+
+    printf("%s\n", communication_buffer);
+
+    int r = write(cli_socket, communication_buffer, strlen(communication_buffer));
     if(r < 0){
       perror("ERROR: unable to write to server\n");
       return 4645641;
     }
 
-    client_file = fopen(rvalue, "ab");
+    char msg[8];
+    bzero(msg, 8);
+    r = read(cli_socket, msg, 7);
+    if(r < 0){
+      perror("ERROR: unable to read from server\n");
+      return 4645641;
+    }
+
+    if(strcmp(msg, "ERRFILE") == 0){
+        fprintf(stderr, "ERROR: Server doesn't have file \"%s\"! \n", filename);
+         exit(43564);
+    }
+    FILE *client_file = fopen(rvalue, "wb");
 
     if(NULL == client_file){
       printf("Error opening file");
       return 1;
     }
 
+    fwrite(msg, 1, 7, client_file);
+
   /* Receive data in chunks of 256 bytes */
 
     while((incomingBytes = read(cli_socket, file_buffer, 256)) > 0){
       printf("Bytes received %d\n",incomingBytes);
-
       fwrite(file_buffer, 1,incomingBytes,client_file);
     }
     if(incomingBytes < 0){
       printf("\n Read Error \n");
     }
 
-  fclose(client_file);
-  }
+    fclose(client_file);
+  }// konec cteni ze serveru
+
+
   /* ZAPIS NA SERVER*/
   else if(wflag == 1){
-    printf ("ZAPIS NA SERVER\n");
 
-    bzero(access_message, 6);
-    strcpy(access_message,"writ");
-    printf("writing...\n");
+    FILE *client_file = fopen(wvalue, "rb");
+    if(NULL == client_file){
+      printf("Error opening file");
+      return 1;
+    }
 
-    int w = write(cli_socket, access_message, strlen(access_message));
+    const char delim = '/';
+    char path[256];
+    char* filename;
+
+    bzero(path, 256);
+    strcpy(path, wvalue);
+
+    filename = strrchr(path, delim);
+
+
+
+    bzero(communication_buffer, 256);
+    char message[256];
+    strcpy(message, "w");
+    if (filename != NULL){
+      strcat(message, filename + 1);
+    }
+    else{
+      strcat(message, wvalue);
+    }
+
+    strcpy(communication_buffer, message);
+
+    int w = write(cli_socket, communication_buffer, strlen(communication_buffer));
     if(w < 0){
-      perror("ERROR: unable to read from server\n");
+      perror("ERROR: unable to write to server\n");
       return 4645641;
     }
+
+
+
+    usleep(100000);
+
+    while(1){
+
+      unsigned char write_buff[256];
+      bzero(write_buff, 256);
+
+      nread = fread(write_buff,1 , 256, client_file);
+
+      if(nread > 0){
+        printf("Sending %d bytes to server \n", nread);
+        write(cli_socket, write_buff, nread);
+      }
+
+      if (nread < 256){
+            if (ferror(client_file))
+            printf("Error reading\n");
+            break;
+      }
+
+    }
+    fclose(client_file);
   }
 
   close(cli_socket); // uzavreni socketu
