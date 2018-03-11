@@ -18,14 +18,14 @@
 
 
  int main(int argc, char* argv[]){
-   if (argc != 3) {
+   if (argc != 3) { // spatny pocet parametru
      perror("ERROR: False number of parameters\n");
-     exit(4);
+     exit(1);
    }
 
   int par, pflag; // pomocne promenne pro getopt()
-  char *pvalue = NULL; // pomocne promenne pro getopt()
-  int pid;
+  char *pvalue = NULL;
+  int pid; // promenna pro cislo precesu ditete
 
   while ((par = getopt (argc, argv, "p:")) != -1) //zpracovani parametru
      switch (par)
@@ -50,28 +50,31 @@
          abort ();
        }
 
-  if(pflag != 1){
-    exit(4);
+  if(pflag != 1){ // chybejici paramter
+    printf("ERROR: missing parameter \"-p\"\n");
+    exit(1);
   }
 
-  //TODO: check ze port je cislo
-
-  int rflag = 0;
+  int rflag = 0; // pomocne flagy
   int wflag = 0;
-  char communication_buffer[256];
-  char filename[252];
-  char RorW[6];
   int nread;
 
-  int ser_socket; // SERVER SOCKET
+  char communication_buffer[256]; //buffer pro prenos zprav o zpusobu komunikace
+  char filename[252];
+  char RorW[2]; // flag zapis nebo cteni
+
+
+  int ser_socket; // hlavni (welcome) SERVER SOCKET
+  int comm_socket; //socket pro prenos dat
   int port = atoi(pvalue); // PORT
+  socklen_t clilen;
 
   struct sockaddr_in serv_addr, cli_addr; //ADRESY
 
  /* SOCKET */
   if((ser_socket = socket(AF_INET, SOCK_STREAM,0)) <= 0){ //inicializace socketu
     perror("ERROR: unable to create socket\n");
-    exit(1);
+    exit(2);
   }
 
   setsockopt(ser_socket, SOL_SOCKET, SO_REUSEADDR, (const void *)1, sizeof(int));
@@ -83,43 +86,44 @@
   serv_addr.sin_addr.s_addr = INADDR_ANY;
 
   if(bind(ser_socket, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0){ // navazani adresy na socket
-    perror("ERROR: unable to bind socket adn address\n");
+    perror("ERROR: unable to bind socket and address\n");
     exit(2);
   }
 
+  printf("INFO: server inicialized and ready for connection(s) by client(s) \n");
+
   /* LISTEN */
   if ( listen(ser_socket, 5) < 0 ){ // prijimani requestu
-    perror("ERROR: listen failen\n");
-    exit(3);
+    perror("ERROR: listen failed\n");
+    exit(2);
   }
 
   /* ACCEPT */
-  socklen_t clilen;
-  int comm_socket;
-  while (1){ // TODO: aktivni cekani
+  while (1){
 
     clilen = sizeof(cli_addr);
     comm_socket = accept(ser_socket, (struct sockaddr*) &cli_addr, &clilen);
-    printf("connected to client: %s\n",inet_ntoa(cli_addr.sin_addr));
+    printf("INFO: new client connected from address %s\n",inet_ntoa(cli_addr.sin_addr));
 
     pid = fork();// rozdeleni procesu na podprocesy
 
     if (pid  == 0){ // proces ditete
-
       close(ser_socket);
-      int child_pid = getpid();
-      printf("New connection by %s (maintained by %d):\n",inet_ntoa(cli_addr.sin_addr), child_pid);
 
       bzero(communication_buffer, 256);
-      nread = read(comm_socket, communication_buffer, 256);
+      nread = read(comm_socket, communication_buffer, 256); // prijem informaci o zpusobu komunikace ze strany klienta
       if (nread < 0){
         printf("ERROR: unable to read data from client");
-        exit(4645);
+        exit(3);
       }
 
+      bzero(RorW, 2);
+      bzero(filename, 252);
 
+      //nastaveni parametru komunikace
       strncpy(RorW, communication_buffer, 1);
       strcpy(filename, communication_buffer + 1);
+
 
       if(strcmp(RorW, "r") == 0){
         rflag = 1;
@@ -135,28 +139,27 @@
         FILE *server_file = fopen(filename, "rb");
         if (server_file == NULL){
           bzero(communication_buffer, 256);
-          strcpy(communication_buffer, "ERRFILE");
-          int w = write(comm_socket, communication_buffer, strlen(communication_buffer));
-          if (w < 0){
+          strcpy(communication_buffer, "ERRFILE"); //odeslani zpravy klientovi o selhani otevreni souboru
+          int r = write(comm_socket, communication_buffer, strlen(communication_buffer));
+          if (r < 0){
             perror("ERROR: unable to write to client\n");
             close(comm_socket);
-            exit(4645641);
+            exit(3);
           }
           fprintf(stderr, "ERROR: fopen() for file \"%s\" failed\n", filename);
           close(comm_socket);
-          exit(7945);
+          exit(3);
       }
 
-        while(1){
+        while(1){ // cyklus odesilani dat klientovi
 
-          unsigned char write_buff[256];
+          unsigned char write_buff[256]; // zapis po blocich o 256 bajtech
           bzero(write_buff, 256);
 
-          nread = fread(write_buff,1 , 256, server_file);
+          nread = fread(write_buff,1 , 256, server_file); //cteni ze souboru
 
           if(nread > 0){
-            printf("Sending %d bytes to client by child %d \n", nread, child_pid);
-            write(comm_socket, write_buff, nread);
+            write(comm_socket, write_buff, nread); // odeslani
           }
 
           if (nread < 256){
@@ -165,12 +168,15 @@
             break;
           }
 
+
         }
-        fclose(server_file);
+        printf("INFO: file \"%s\" sucessfuly sent to client (%s) \n", filename, inet_ntoa(cli_addr.sin_addr));
+        fclose(server_file); // zavreni souboru
       } // konec cteni
 
       /* ZAPIS NA SERVER*/
       else if(wflag == 1){
+
         wflag = 0;
         unsigned char read_buff[256];
         int incomingBytes;
@@ -178,18 +184,19 @@
         FILE *server_file = fopen(filename, "wb");
         if (server_file == NULL){
           perror("ERROR: fopen() failed\n");
-          exit(7945);
+          exit(3);
         }
 
+        //cteni dat ze socketu po blocich o 256 bajtech
         while((incomingBytes = read(comm_socket, read_buff, 256)) > 0){
-          //printf("%d Bytes received with child %d. \n",incomingBytes, child_pid);
-
-          fwrite(read_buff, 1,incomingBytes, server_file);
+          fwrite(read_buff, 1,incomingBytes, server_file); //zapis do souboru
         }
+
         if(incomingBytes < 0){
-          printf("\n Read Error \n");
+          printf(" ERROR: cannot read the file \n");
         }
 
+        printf("INFO: file \"%s\" sucessfuly downloaded from client (%s) \n", filename, inet_ntoa(cli_addr.sin_addr));
         fclose(server_file);
 
       } // konec zapisu
@@ -199,7 +206,7 @@
     }// konec forku
     else if(pid < 0){
       perror("ERROR: unable to fork process...");
-      exit(416874);
+      exit(4);
     }
     else{ // proces rodice
       close(comm_socket);
