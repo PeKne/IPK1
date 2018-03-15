@@ -10,7 +10,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
-#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -19,26 +18,26 @@
 #include <fcntl.h>
 #include <time.h>
 
+//TODO : navratove hodnoty, zpravy
+
 int main(int argc, char* argv[]){
   int cli_socket; // promenna pro SOCKET
   int port; //PORT
   struct sockaddr_in serv_addr;
   struct hostent *server;
-  char file_buffer[256]; // buffer pro prenos dat souboru
-  char communication_buffer[256]; // buffer pro prenos komunikacnich zprav
+  char file_buffer[256];
+  char communication_buffer[256];
   int incomingBytes;
 
-  if (argc != 7) { //spatny pocet parametru
+  if (argc != 7) {
     perror("ERROR: False number of parameters\n");
-    return 1;
+    return 4;
   }
-
-// pomocne promenne pro getopt()
  int par;
  int nread;
- int hflag, pflag, rflag, wflag;
+ int hflag, pflag, rflag, wflag; // pomocne promenne pro getopt()
  hflag = pflag = rflag = wflag = 0;
- char *hvalue, *pvalue, *rvalue, *wvalue;
+ char *hvalue, *pvalue, *rvalue, *wvalue; // pomocne promenne pro getopt()
  hvalue = pvalue = rvalue = wvalue = NULL;
 
  while ((par = getopt (argc, argv, "h:p:r:w:")) != -1) //zpracovani parametru
@@ -74,14 +73,14 @@ int main(int argc, char* argv[]){
           fprintf (stderr,
                    "Unknown option character `\\x%x'.\n",
                    optopt);
-        return 1;
+        return 4;
       default:
         abort ();
       }
 
  if(hflag != 1  || pflag != 1  || (rflag == wflag )){
    printf("ERROR: wrong format of parameters\n");
-   return 1;
+   return 4;
  }
 
   port = atoi(pvalue);
@@ -94,10 +93,10 @@ int main(int argc, char* argv[]){
 
   setsockopt(cli_socket, SOL_SOCKET, SO_REUSEADDR, (const void *)1, sizeof(int));
 
-  server = gethostbyname(hvalue); //nacteni adresy SERVERU
+  server = gethostbyname(hvalue); //nacteni adresy hosta
   if(server == NULL){
     printf("ERROR: no such host\n");
-    return 2;
+    return 3;
   }
 
   bzero((char*)& serv_addr, sizeof(serv_addr)); // nastaveni hodnot adresy
@@ -106,84 +105,73 @@ int main(int argc, char* argv[]){
   serv_addr.sin_port = htons(port);
 
   if (connect(cli_socket, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0){ // pripojeni na server
-    printf("ERROR: unable to connect to \"%s\"\n", hvalue);
+    printf("ERROR: unable to connect\n");
     return 4;
   }
-
-  printf("INFO: connection establised\n" );
 
 
 
   /* CTENI ZE SERVERU*/
   if(rflag == 1){
 
-
-    const char delim = '/'; //delimer pro odeleni nazvu souboru od cesty
-    char raw_path[256], dir_path[256];
+    const char delim = '/';
+    char path[256];
     char* filename;
 
-    bzero(raw_path, 256);
-    bzero(dir_path, 256);
-    strcpy(raw_path, rvalue);
-    filename =strrchr(raw_path, delim);
+    bzero(path, 256);
+    strcpy(path, rvalue);
+
+    filename =strrchr(path, delim);
+
     bzero(communication_buffer, 256);
     char message[256];
-
     strcpy(message, "r");
-
-
-    if (filename != NULL){ //pokud soubor je ve slozce
-      filename = filename + 1;
-      strcat(message, filename);
-      strncpy(dir_path, raw_path, (strlen(raw_path) - strlen(filename)));//ulozeni cesty k souboru
-      int d =mkdir(dir_path, 0777);
-      if (d == 0)
-        printf("INFO: directory \"%s\" was created\n", dir_path);
+    if (filename != NULL){
+      strcat(message, filename + 1);
     }
-    else{ //samotny soubor
+    else{
       strcat(message, rvalue);
-      filename = rvalue;
     }
 
     strcpy(communication_buffer, message);
 
-    //odeslani konfiguraci zpravy serveru
+    printf("%s\n", communication_buffer);
+
     int r = write(cli_socket, communication_buffer, strlen(communication_buffer));
     if(r < 0){
       perror("ERROR: unable to write to server\n");
-      return 4;
+      return 4645641;
     }
 
     char msg[8];
     bzero(msg, 8);
-    r = read(cli_socket, msg, 7); // cteni zpravy od serveru zda soubor existuje
+    r = read(cli_socket, msg, 7);
     if(r < 0){
       perror("ERROR: unable to read from server\n");
-      return 4;
+      return 4645641;
     }
 
-    if(strcmp(msg, "ERRFILE") == 0){ // soubor neexistuje
+    if(strcmp(msg, "ERRFILE") == 0){
         fprintf(stderr, "ERROR: Server doesn't have file \"%s\"! \n", filename);
-         return 4;
+         exit(43564);
     }
-
     FILE *client_file = fopen(rvalue, "wb");
+
     if(NULL == client_file){
       printf("Error opening file");
-      return 5;
+      return 1;
     }
 
-    fwrite(msg, 1, 7, client_file); // zapis jiz prectenych dat
+    fwrite(msg, 1, 7, client_file);
 
-    // prijem dat souboru po blocich o 256 bajtech
+  /* Receive data in chunks of 256 bytes */
+
     while((incomingBytes = read(cli_socket, file_buffer, 256)) > 0){
-      fwrite(file_buffer, 1,incomingBytes,client_file); // zapis do souboru
+      printf("Bytes received %d\n",incomingBytes);
+      fwrite(file_buffer, 1,incomingBytes,client_file);
     }
     if(incomingBytes < 0){
       printf("\n Read Error \n");
-    }
-    else{
-      printf("INFO: file \"%s\" was downloaded from server on address %s \n", filename, hvalue);
     }
 
     fclose(client_file);
@@ -196,42 +184,43 @@ int main(int argc, char* argv[]){
     FILE *client_file = fopen(wvalue, "rb");
     if(NULL == client_file){
       printf("Error opening file");
-      return 5;
+      return 1;
     }
 
-    const char delim = '/'; //delimer pro odeleni nazvu souboru od cesty
+    const char delim = '/';
     char path[256];
     char* filename;
 
     bzero(path, 256);
     strcpy(path, wvalue);
 
-    filename = strrchr(path, delim); //ziskani nazvu souboru
+    filename = strrchr(path, delim);
 
 
 
     bzero(communication_buffer, 256);
     char message[256];
     strcpy(message, "w");
-    if (filename != NULL){ // soubor je ulozen ve slozce
+    if (filename != NULL){
       strcat(message, filename + 1);
     }
-    else{ //samotny soubor
+    else{
       strcat(message, wvalue);
-      filename = wvalue;
     }
 
     strcpy(communication_buffer, message);
 
-    //odeslani konfiguracni zpravy severu
     int w = write(cli_socket, communication_buffer, strlen(communication_buffer));
     if(w < 0){
       perror("ERROR: unable to write to server\n");
-      return 4;
+      return 4645641;
     }
-    usleep(100000); //casove pauza pr oddeleni zapisu zpravy a zapisu dat souboru
 
-    while(1){ //cyklus zapisu souboru
+
+
+    usleep(100000);
+
+    while(1){
 
       unsigned char write_buff[256];
       bzero(write_buff, 256);
@@ -239,7 +228,8 @@ int main(int argc, char* argv[]){
       nread = fread(write_buff,1 , 256, client_file);
 
       if(nread > 0){
-        write(cli_socket, write_buff, nread); // zapis souboru po blocich o 256 bajtech
+        printf("Sending %d bytes to server \n", nread);
+        write(cli_socket, write_buff, nread);
       }
 
       if (nread < 256){
@@ -248,10 +238,9 @@ int main(int argc, char* argv[]){
             break;
       }
 
-    } // konec zapisu dat
-    printf("INFO: file \"%s\" was sent to server on address %s \n", filename, hvalue);
+    }
     fclose(client_file);
-  } // konec if (wflag == 1)
+  }
 
   close(cli_socket); // uzavreni socketu
   return 0;
